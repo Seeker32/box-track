@@ -1,0 +1,13 @@
+[project]
+name = "box-track"
+version = "0.2.0"
+description = "Multi-camera cardboard box tracking system"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "ultralytics>=8.4.60",
+    "pyyaml>=6.0",
+    "scipy>=1.10.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+]
