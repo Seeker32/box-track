@@ -45,3 +45,5 @@ configs/*.yaml
 
 # Documentation build
 docs/_build/
+
+.env
