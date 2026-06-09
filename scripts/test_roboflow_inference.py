@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # ---------- Roboflow client config ----------
 API_URL = "https://serverless.roboflow.com"
 API_KEY = os.getenv("API_KEY")
-MODEL_ID = "box-detection-sz4gh-dum2a/3"
+MODEL_ID = "box-detection-sz4gh-dum2a/2"
 TARGET_CLASS = "cardboard"
 
 # BGR color for cardboard boxes (green)

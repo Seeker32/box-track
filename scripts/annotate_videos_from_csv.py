@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 
-DEFAULT_CSV = Path("output/trajectories/detections_20260609_143105.csv")
+DEFAULT_CSV = Path("output/trajectories/detections_20260609_171100.csv")
 DEFAULT_INPUT_DIR = Path("input")
 DEFAULT_OUTPUT_DIR = Path("output/videos")
 DEFAULT_SUFFIX = "_csv_id0_red"
