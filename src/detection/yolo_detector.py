@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class YOLODetector:
     """Thin wrapper around YOLO for running box detection on images or videos."""
 
-    def __init__(self, model_path: str = "models/best.pt", conf: float = 0.25):
+    def __init__(self, model_path: str = "models/best.pt", conf: float = 0.7):
         """Initialize the detector.
 
         Args:

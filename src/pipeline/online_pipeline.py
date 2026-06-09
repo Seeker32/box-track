@@ -17,6 +17,7 @@ import yaml
 from src.association.global_id_manager import GlobalIDManager
 from src.io import MultiStreamManager, StreamReader
 from src.tracking.botsort_tracker import BOTSORTTracker
+from src.tracking.factory import create_tracker
 from src.utils.persistence import TrajectoryLogger, export_csv, export_summary_json
 from src.utils.tracklet import Tracklet
 from src.utils.visualization import draw_frame, VideoWriter
@@ -260,16 +261,10 @@ class OnlineCrossCameraPipeline:
         """Create a BOTSORTTracker for each camera."""
         if self._stream_mgr is None:
             return
-        model_path = self.config.get("model_path", "models/best.pt")
-        tracker_cfg = self.config.get("tracker_cfg", "configs/botsort.yaml")
-        conf = self.config.get("conf", 0.25)
-
         for cam_id in self._stream_mgr.camera_ids:
-            self._trackers[cam_id] = BOTSORTTracker(
+            self._trackers[cam_id] = create_tracker(
                 camera_id=cam_id,
-                model_path=model_path,
-                tracker_cfg=tracker_cfg,
-                conf=conf,
+                config=self.config,
             )
             logger.info("Tracker initialized for camera %d", cam_id)
 
@@ -408,20 +403,27 @@ class OnlineCrossCameraPipeline:
         matching_cfg = self.config.get("matching", {})
 
         for cam_id, video_path in enumerate(video_paths):
-            tracker = BOTSORTTracker(
-                camera_id=cam_id,
-                tracker_cfg=self.config.get("tracker_cfg", "configs/botsort.yaml"),
-            )
+            tracker = create_tracker(camera_id=cam_id, config=self.config)
             cap = cv2.VideoCapture(video_path)
             if not cap.isOpened():
                 raise ValueError(f"Cannot open video: {video_path}")
 
             fps = cap.get(cv2.CAP_PROP_FPS)
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             frame_id = 0
 
             logger.info("Processing camera %d: %s (%d frames, %.1f fps)",
                          cam_id, video_path, total_frames, fps)
+
+            # Setup video writer for annotated output
+            writer = None
+            if self.viz_enabled:
+                self.output_video_dir.mkdir(parents=True, exist_ok=True)
+                cam_name = Path(video_path).stem
+                out_path = self.output_video_dir / f"{cam_name}_annotated.mp4"
+                writer = VideoWriter(str(out_path), fps=fps, size=(w, h))
 
             try:
                 while cap.isOpened():
@@ -432,10 +434,21 @@ class OnlineCrossCameraPipeline:
                     tracker.process_frame(frame, frame_id, timestamp)
                     frame_id += 1
 
+                    # Draw and write annotated frame
+                    if writer is not None:
+                        annotated = frame.copy()
+                        active = [tracker.active_tracks[tid]
+                                  for tid in tracker.active_tracks
+                                  if tid in tracker.active_tracks]
+                        draw_frame(annotated, active, cam_id)
+                        writer.write(annotated)
+
                     if frame_id % 100 == 0:
                         logger.info("Camera %d: %d/%d frames", cam_id, frame_id, total_frames)
             finally:
                 cap.release()
+                if writer is not None:
+                    writer.close()
 
             tracker.flush()
             all_tracklets[cam_id] = list(tracker.completed_tracklets)

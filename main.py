@@ -5,6 +5,10 @@ Phase 1: YOLO backbone feature validation for cross-camera matching.
 Phase 2: Complete multi-camera real-time tracking system.
 
 Usage:
+    # Real-time camera detection
+    python main.py --camera 0                    # webcam with display
+    python main.py --camera 0 --output-dir out   # webcam + record to file
+
     # Phase 1: Feature validation
     python main.py --phase1 --mode separability
     python main.py --phase1 --mode synthetic
@@ -42,6 +46,205 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger("box-track")
+
+
+# =========================================================================
+# Single-video detection mode
+# =========================================================================
+
+
+def run_single_video_detection(video_path: str, args: argparse.Namespace) -> None:
+    """Run YOLO detection on a single video and save annotated output.
+
+    Args:
+        video_path: Path to the video file.
+        args: Parsed command-line arguments.
+    """
+    logger.info("=== Single Video Detection ===")
+    logger.info("Video: %s", video_path)
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open video: {video_path}")
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cap.release()
+
+    logger.info("Resolution: %dx%d, FPS: %.1f, Total frames: %d", w, h, fps, total_frames)
+
+    detector = YOLODetector(args.model, conf=args.conf)
+    class_names: dict[int, str] = detector.model.names or {}  # type: ignore[assignment]
+
+    # Setup output video writer
+    out_dir = Path(args.output_dir or "output")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{Path(video_path).stem}_detected.mp4"
+    writer = cv2.VideoWriter(
+        str(out_path),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        fps / args.stride if fps > 0 else 30,
+        (w, h),
+    )
+
+    total_detections = 0
+    processed_frames = 0
+
+    logger.info("Processing (stride=%d, conf=%.2f)...", args.stride, args.conf)
+
+    for frame_id, bboxes, frame in detector.detect_video(video_path, stride=args.stride):
+        processed_frames += 1
+        total_detections += len(bboxes)
+
+        # Annotate frame
+        annotated = frame.copy()
+        for bb in bboxes:
+            x1, y1, x2, y2 = map(int, [bb.x1, bb.y1, bb.x2, bb.y2])
+            cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            name = class_names.get(bb.cls_id, f"cls_{bb.cls_id}")
+            label = f"{name} {bb.conf:.2f}"
+            cv2.putText(annotated, label, (x1, y1 - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+        # Frame counter
+        cv2.putText(annotated, f"Frame: {frame_id}  Detections: {len(bboxes)}",
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+        writer.write(annotated)
+
+        if args.display:
+            cv2.imshow("Detection", annotated)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                logger.info("'q' pressed, stopping early")
+                break
+
+        if processed_frames % 100 == 0:
+            real_frame = frame_id + 1
+            pct = real_frame / total_frames * 100
+            logger.info("  Frame %d/%d (%.0f%%) | %d detections",
+                         real_frame, total_frames, pct, len(bboxes))
+
+    writer.release()
+    if args.display:
+        cv2.destroyAllWindows()
+
+    avg_per_frame = total_detections / processed_frames if processed_frames else 0
+    logger.info("\n=== Detection Summary ===")
+    logger.info("  Processed frames:   %d", processed_frames)
+    logger.info("  Total detections:   %d", total_detections)
+    logger.info("  Avg detections/frame: %.1f", avg_per_frame)
+    logger.info("  Output video:       %s", out_path)
+    logger.info("  Frames with boxes:  (see output video)")
+
+
+# =========================================================================
+# Real-time camera detection mode
+# =========================================================================
+
+
+def run_camera_detection(args: argparse.Namespace) -> None:
+    """Run YOLO detection on a local camera with real-time display.
+
+    Args:
+        args: Parsed command-line arguments.
+    """
+    camera_idx = args.camera
+    logger.info("=== Real-Time Camera Detection ===")
+    logger.info("Camera index: %d", camera_idx)
+
+    cap = cv2.VideoCapture(camera_idx)
+    if not cap.isOpened():
+        raise ValueError(f"Cannot open camera index: {camera_idx}")
+
+    # Try to read one frame to get camera properties
+    ret, frame = cap.read()
+    if not ret:
+        cap.release()
+        raise RuntimeError(f"Cannot read from camera {camera_idx}")
+
+    h, w = frame.shape[:2]
+    logger.info("Resolution: %dx%d", w, h)
+
+    detector = YOLODetector(args.model, conf=args.conf)
+    class_names: dict[int, str] = detector.model.names or {}  # type: ignore[assignment]
+
+    # Setup output video writer (optional)
+    writer = None
+    if args.output_dir:
+        out_dir = Path(args.output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"camera_{camera_idx}_detected.mp4"
+        writer = cv2.VideoWriter(
+            str(out_path),
+            cv2.VideoWriter_fourcc(*"mp4v"),
+            30.0,
+            (w, h),
+        )
+        logger.info("Recording to: %s", out_path)
+
+    logger.info("Processing camera feed (conf=%.2f). Press 'q' to quit.", args.conf)
+
+    frame_id = 0
+    total_detections = 0
+    window_name = f"Camera {camera_idx} - Detection"
+
+    try:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                logger.warning("Failed to read frame %d", frame_id)
+                frame_id += 1
+                continue
+
+            timestamp = frame_id / 30.0  # approximate
+            bboxes, _ = detector.detect(frame, frame_id=frame_id, timestamp=timestamp)
+            total_detections += len(bboxes)
+
+            # Annotate frame
+            annotated = frame.copy()
+            for bb in bboxes:
+                x1, y1, x2, y2 = map(int, [bb.x1, bb.y1, bb.x2, bb.y2])
+                cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 255, 0), 2)
+                name = class_names.get(bb.cls_id, f"cls_{bb.cls_id}")
+                label = f"{name} {bb.conf:.2f}"
+                cv2.putText(annotated, label, (x1, y1 - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+
+            # Overlay info
+            cv2.putText(annotated,
+                        f"Frame: {frame_id}  Detections: {len(bboxes)}  "
+                        f"Total: {total_detections}  [q=quit]",
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+            # Show
+            cv2.imshow(window_name, annotated)
+
+            # Record if writer is set
+            if writer is not None:
+                writer.write(annotated)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                logger.info("'q' pressed, stopping")
+                break
+
+            frame_id += 1
+
+    finally:
+        cap.release()
+        cv2.destroyWindow(window_name)
+        if writer is not None:
+            writer.release()
+            logger.info("Saved recording to: %s", out_path)
+
+    logger.info("\n=== Camera Detection Summary ===")
+    logger.info("  Processed frames:   %d", frame_id)
+    logger.info("  Total detections:   %d", total_detections)
+    avg = total_detections / frame_id if frame_id else 0
+    logger.info("  Avg detections/frame: %.1f", avg)
 
 
 # =========================================================================
@@ -281,11 +484,12 @@ def run_synthetic_test(image_path: str) -> dict:
     }
 
 
-def run_video_evaluation(video_paths: list[str]) -> dict:
+def run_video_evaluation(video_paths: list[str], config_path: str) -> dict:
     """Mode C: Full video-based cross-camera evaluation.
 
     Args:
         video_paths: List of video file paths (one per camera).
+        config_path: Path to pipeline YAML config.
 
     Returns:
         dict with evaluation metrics.
@@ -296,7 +500,7 @@ def run_video_evaluation(video_paths: list[str]) -> dict:
     if len(video_paths) < 2:
         raise ValueError("Need at least 2 videos for cross-camera evaluation")
 
-    pipeline = CrossCameraPipeline("configs/pipeline.yaml")
+    pipeline = CrossCameraPipeline(config_path)
 
     # Process each camera's video
     all_tracklets: dict[int, list[Tracklet]] = {}
@@ -343,24 +547,18 @@ def run_phase2_rtsp(streams: list[str], config_path: str, args: argparse.Namespa
     logger.info("Streams: %s", streams)
 
     pipeline = OnlineCrossCameraPipeline(config_path)
+    apply_phase2_tracker_overrides(pipeline.config, args)
 
-    # Override config with CLI args
+    # Apply CLI overrides to pipeline instance attributes
     if args.no_viz:
-        pipeline.config.setdefault("online", {})["visualization"] = False
+        pipeline.viz_enabled = False
     if args.display:
-        pipeline.config.setdefault("online", {})["display"] = True
+        pipeline.display_enabled = True
     if args.no_persist:
-        pipeline.config.setdefault("online", {})["persistence"] = False
+        pipeline.persistence_enabled = False
     if args.output_dir:
-        pipeline.config.setdefault("online", {})["output_video_dir"] = str(
-            Path(args.output_dir) / "videos"
-        )
-        pipeline.config.setdefault("persistence", {})["output_dir"] = str(
-            Path(args.output_dir) / "trajectories"
-        )
-
-    # Re-initialize to apply overrides
-    pipeline.__init__(config_path)
+        pipeline.output_video_dir = Path(args.output_dir) / "videos"
+        pipeline.output_persist_dir = Path(args.output_dir) / "trajectories"
 
     pipeline.setup_streams(streams)
     summary = pipeline.run()
@@ -383,28 +581,40 @@ def run_phase2_video(video_paths: list[str], config_path: str, args: argparse.Na
         raise ValueError("Need at least 2 videos for cross-camera tracking")
 
     pipeline = OnlineCrossCameraPipeline(config_path)
+    apply_phase2_tracker_overrides(pipeline.config, args)
 
-    # Override config with CLI args
+    # Apply CLI overrides to pipeline instance attributes
     if args.no_viz:
-        pipeline.config.setdefault("online", {})["visualization"] = False
+        pipeline.viz_enabled = False
     if args.display:
-        pipeline.config.setdefault("online", {})["display"] = True
+        pipeline.display_enabled = True
     if args.no_persist:
-        pipeline.config.setdefault("online", {})["persistence"] = False
+        pipeline.persistence_enabled = False
     if args.output_dir:
-        pipeline.config.setdefault("online", {})["output_video_dir"] = str(
-            Path(args.output_dir) / "videos"
-        )
-        pipeline.config.setdefault("persistence", {})["output_dir"] = str(
-            Path(args.output_dir) / "trajectories"
-        )
-
-    # Re-initialize to apply overrides
-    pipeline.__init__(config_path)
+        pipeline.output_video_dir = Path(args.output_dir) / "videos"
+        pipeline.output_persist_dir = Path(args.output_dir) / "trajectories"
 
     summary = pipeline.process_videos(video_paths)
 
     logger.info("Phase 2 video pipeline finished: %s", summary)
+
+
+def apply_phase2_tracker_overrides(config: dict, args: argparse.Namespace) -> None:
+    """Apply tracker backend CLI overrides to a loaded pipeline config."""
+    if args.tracker_backend:
+        config["tracker_backend"] = args.tracker_backend
+
+    if args.feature_model:
+        config.setdefault("feature", {})["model_path"] = args.feature_model
+
+    roboflow_overrides = {
+        "model_id": args.roboflow_model_id,
+        "api_key_env": args.roboflow_api_key_env,
+        "target_class": args.roboflow_target_class,
+    }
+    for key, value in roboflow_overrides.items():
+        if value:
+            config.setdefault("roboflow", {})[key] = value
 
 
 # =========================================================================
@@ -430,9 +640,9 @@ def main():
 
     # General arguments
     parser.add_argument(
-        "--mode", choices=["separability", "synthetic", "video", "rtsp"],
+        "--mode", choices=["separability", "synthetic", "video", "rtsp", "detect"],
         default="separability",
-        help="Operation mode",
+        help="Operation mode ('detect' = single video detection)",
     )
     parser.add_argument(
         "--image", default="input/IMG_20260605_225534.jpg",
@@ -448,8 +658,42 @@ def main():
         "--model", default="models/best.pt", help="Path to YOLO model",
     )
     parser.add_argument(
+        "--conf", type=float, default=0.3,
+        help="Detection confidence threshold (default: 0.3)",
+    )
+    parser.add_argument(
+        "--stride", type=int, default=1,
+        help="Process every Nth frame (default: 1 = all frames)",
+    )
+    parser.add_argument(
         "--config", default="configs/pipeline.yaml",
         help="Path to pipeline YAML config",
+    )
+    parser.add_argument(
+        "--tracker-backend",
+        choices=["botsort", "roboflow_bytetrack"],
+        default=None,
+        help="Phase 2 tracker backend override",
+    )
+    parser.add_argument(
+        "--roboflow-model-id",
+        default=None,
+        help="Roboflow model ID for roboflow_bytetrack backend",
+    )
+    parser.add_argument(
+        "--roboflow-api-key-env",
+        default=None,
+        help="Environment variable name containing the Roboflow API key",
+    )
+    parser.add_argument(
+        "--roboflow-target-class",
+        default=None,
+        help="Roboflow class name to keep for tracking",
+    )
+    parser.add_argument(
+        "--feature-model",
+        default=None,
+        help="YOLO model used for Phase 2 appearance feature extraction",
     )
 
     # Phase 2 flags
@@ -470,11 +714,35 @@ def main():
         help="Disable trajectory persistence",
     )
     parser.add_argument(
+        "--camera", type=int, default=None,
+        help="Local camera index (e.g., 0, 1) for real-time detection",
+    )
+    parser.add_argument(
         "--output-dir", default=None,
         help="Base output directory (default: 'output/')",
     )
 
     args = parser.parse_args()
+
+    # ------------------------------------------------------------------
+    # Real-time camera detection (standalone)
+    # ------------------------------------------------------------------
+    if args.camera is not None:
+        run_camera_detection(args)
+        return
+
+    # ------------------------------------------------------------------
+    # Single-video detection mode (standalone)
+    # ------------------------------------------------------------------
+    if args.mode == "detect":
+        if not args.videos:
+            logger.error("--videos required for detect mode. Example:")
+            logger.error("  python main.py --mode detect --videos test.mp4")
+            sys.exit(1)
+        if len(args.videos) > 1:
+            logger.warning("Detect mode only processes the first video: %s", args.videos[0])
+        run_single_video_detection(args.videos[0], args)
+        return
 
     # ------------------------------------------------------------------
     # Phase 2
@@ -515,7 +783,7 @@ def main():
             if not args.videos:
                 logger.error("--videos required for video mode")
                 sys.exit(1)
-            result = run_video_evaluation(args.videos)
+            result = run_video_evaluation(args.videos, args.config)
         else:
             logger.error("Unknown mode: %s", args.mode)
             sys.exit(1)
@@ -551,10 +819,8 @@ def main():
         logger.info("  Box %d: %.0fx%.0f @ (%.0f, %.0f), conf=%.2f, feat_dim=%d",
                      i, bb.width, bb.height, bb.x1, bb.y1, bb.conf, feat.shape[0])
 
-    # Save annotated image
-    from ultralytics import YOLO
-    model = YOLO(args.model)
-    results = model(image_path)
+    # Save annotated image (reuse detector model with same confidence threshold)
+    results = detector.model(image_path, conf=detector.conf, verbose=False)
     out_dir = Path("output")
     out_dir.mkdir(exist_ok=True)
     out_path = out_dir / f"{Path(image_path).stem}_annotated.jpg"

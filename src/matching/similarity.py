@@ -104,6 +104,19 @@ def compute_tracklet_similarity(
     Returns:
         Similarity score in [0, 1].
     """
+    # Class gate (optional): reject cross-class matches
+    if config.get("class_gate_enabled", False):
+        cls_a = t_a.cls_id
+        cls_b = t_b.cls_id
+        if cls_a is not None and cls_b is not None and cls_a != cls_b:
+            logger.debug(
+                "Class gate rejected: cam %d local %d (cls=%s) vs "
+                "cam %d local %d (cls=%s)",
+                t_a.camera_id, t_a.local_id, cls_a,
+                t_b.camera_id, t_b.local_id, cls_b,
+            )
+            return 0.0
+
     # Spatiotemporal gate
     st_score = compute_spatiotemporal_score(t_a, t_b, config)
     if st_score <= 0.0:

@@ -70,6 +70,9 @@ class Tracklet:
     # Aggregated tracklet-level feature vector
     aggregated_feature: np.ndarray | None = None
 
+    # Majority class inferred from bboxes (None until computed)
+    cls_id: int | None = None
+
     @property
     def duration(self) -> float:
         return self.end_time - self.start_time
@@ -113,6 +116,26 @@ class Tracklet:
         self.aggregated_feature = feat
         return feat
 
+    def infer_majority_class(self) -> int | None:
+        """Infer the majority class from bboxes via confidence-weighted voting.
+
+        Scans all stored BBox objects and selects the cls_id with the
+        highest total confidence sum. Sets self.cls_id and returns it.
+
+        Returns:
+            The majority cls_id, or None if no bboxes exist.
+        """
+        if not self.bboxes:
+            self.cls_id = None
+            return None
+
+        conf_sums: dict[int, float] = {}
+        for bb in self.bboxes:
+            conf_sums[bb.cls_id] = conf_sums.get(bb.cls_id, 0.0) + bb.conf
+
+        self.cls_id = max(conf_sums, key=conf_sums.__getitem__)
+        return self.cls_id
+
     def to_summary(self) -> dict:
         """Return a human-readable summary dict."""
         return {
@@ -124,4 +147,5 @@ class Tracklet:
             "duration": self.duration,
             "num_detections": self.num_detections,
             "has_features": self.aggregated_feature is not None,
+            "cls_id": self.cls_id,
         }

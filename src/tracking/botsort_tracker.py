@@ -31,7 +31,7 @@ class BOTSORTTracker:
         camera_id: int,
         model_path: str = "models/best.pt",
         tracker_cfg: str = "configs/botsort.yaml",
-        conf: float = 0.25,
+        conf: float = 0.7,
         hook_layer: int = -2,
     ):
         """Initialize the tracker.
@@ -155,6 +155,7 @@ class BOTSORTTracker:
             tracklet = self.active_tracks.pop(tid)
             if len(tracklet.features) > 0:
                 tracklet.aggregate_features()
+                tracklet.infer_majority_class()
                 self.completed_tracklets.append(tracklet)
 
     def flush(self) -> None:
@@ -163,6 +164,7 @@ class BOTSORTTracker:
             tracklet = self.active_tracks.pop(tid)
             if len(tracklet.features) > 0:
                 tracklet.aggregate_features()
+                tracklet.infer_majority_class()
                 self.completed_tracklets.append(tracklet)
 
     @property

@@ -9,7 +9,7 @@ import yaml
 
 from src.association.global_id_manager import GlobalIDManager
 from src.matching.similarity import compute_backbone_similarity
-from src.tracking.botsort_tracker import BOTSORTTracker
+from src.tracking.factory import create_tracker
 from src.utils.tracklet import Tracklet
 
 logger = logging.getLogger(__name__)
@@ -59,10 +59,7 @@ class CrossCameraPipeline:
         matching_cfg = self.config.get("matching", {})
         feature_cfg = self.config.get("feature", {})
 
-        tracker = BOTSORTTracker(
-            camera_id=camera_id,
-            tracker_cfg=self.config.get("tracker_cfg", "configs/botsort.yaml"),
-        )
+        tracker = create_tracker(camera_id=camera_id, config=self.config)
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
