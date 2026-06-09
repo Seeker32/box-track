@@ -20,7 +20,7 @@ class RoboflowDetector:
         api_url: str = "https://serverless.roboflow.com",
         api_key: str | None = None,
         api_key_env: str = "API_KEY",
-        model_id: str = "box-detection-sz4gh-dum2a/3",
+        model_id: str = "box-detection-sz4gh-dum2a/2",
         target_class: str = "cardboard",
         conf: float = 0.7,
         class_id: int = 0,

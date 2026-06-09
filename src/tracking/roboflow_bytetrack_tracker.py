@@ -45,7 +45,7 @@ class RoboflowByteTrackTracker:
             api_url=config.get("api_url", "https://serverless.roboflow.com"),
             api_key=config.get("api_key"),
             api_key_env=config.get("api_key_env", "API_KEY"),
-            model_id=config.get("model_id", "box-detection-sz4gh-dum2a/3"),
+            model_id=config.get("model_id", "box-detection-sz4gh-dum2a/2"),
             target_class=config.get("target_class", "cardboard"),
             conf=config.get("conf", conf),
             class_id=config.get("class_id", 0),
